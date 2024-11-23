@@ -1,10 +1,5 @@
 const std = @import("std");
 
-pub const Mode = enum {
-    assemble,
-    disassemble,
-};
-
 pub const ConfigParseErr = error{
     missing_required_arg,
     conflicting_mode,
@@ -15,6 +10,27 @@ pub const ConfigParseErr = error{
 pub const Config = struct {
     mode: Mode,
     input: ?[]const u8 = null,
+
+    pub const Mode = enum {
+        assemble,
+        disassemble,
+    };
+};
+
+pub const OpCode = enum(u6) {
+    mov = 0b10001,
+
+    const OpCodeParseErr = error{
+        unsupported_instruction,
+    };
+
+    pub fn tryParse(bits: u6) OpCodeParseErr!OpCode {
+        if (std.meta.intToEnum(OpCode, bits)) |op| {
+            return op;
+        } else |_| {
+            return OpCodeParseErr.unsupported_instruction;
+        }
+    }
 };
 
 pub fn main() !void {
@@ -36,11 +52,23 @@ pub fn main() !void {
         return err;
     };
 
-    _ = config;
+    const input_file = if (config.input == null)
+        // Default to stdin if no input path was passed
+        std.io.getStdIn()
+    else
+        try std.fs.cwd().openFile(config.input.?, .{});
+    defer input_file.close();
+
+    switch (config.mode) {
+        Config.Mode.disassemble => {
+            _ = try disassemble(&input_file);
+        },
+        Config.Mode.assemble => {},
+    }
 }
 
 pub fn parseArgs(args: []const []const u8) ConfigParseErr!Config {
-    var app_mode: ?Mode = null;
+    var app_mode: ?Config.Mode = null;
     var input: ?[]const u8 = null;
     var i: usize = 1; // Skip program name
 
@@ -78,8 +106,12 @@ pub fn parseArgs(args: []const []const u8) ConfigParseErr!Config {
     };
 }
 
-fn disassemble(f: *std.fs.File) !void {
-    _ = f;
+pub fn disassemble(input: *const std.fs.File) !OpCode {
+    var buf: [1024]u8 = undefined;
+    const bytes_read = try input.readAll(&buf);
+    _ = bytes_read;
+
+    return OpCode.tryParse(@intCast(buf[0] >> 2));
 }
 
 test "parser rejects missing mode argument" {
@@ -109,20 +141,20 @@ test "parser rejects unknown arguments" {
 test "parser accepts valid assemble config" {
     const test_args = [_][]const u8{ "program", "-a", "-i", "input.txt" };
     const config = try parseArgs(&test_args);
-    try std.testing.expectEqual(Mode.assemble, config.mode);
+    try std.testing.expectEqual(Config.Mode.assemble, config.mode);
     try std.testing.expectEqualStrings("input.txt", config.input.?);
 }
 
 test "parser accepts valid disassemble config" {
     const test_args = [_][]const u8{ "program", "-d", "-i", "input.txt" };
     const config = try parseArgs(&test_args);
-    try std.testing.expectEqual(Mode.disassemble, config.mode);
+    try std.testing.expectEqual(Config.Mode.disassemble, config.mode);
     try std.testing.expectEqualStrings("input.txt", config.input.?);
 }
 
 test "parser accepts mode with no input (defaults to null)" {
     const test_args = [_][]const u8{ "program", "-a" };
     const config = try parseArgs(&test_args);
-    try std.testing.expectEqual(Mode.assemble, config.mode);
+    try std.testing.expectEqual(Config.Mode.assemble, config.mode);
     try std.testing.expect(config.input == null);
 }
