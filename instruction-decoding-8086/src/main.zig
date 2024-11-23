@@ -1,33 +1,20 @@
 const std = @import("std");
 
-const Cfg = struct {
-    file_path: *const []u8,
-    mode: AppMode = .disassemble,
+pub const Mode = enum {
+    assemble,
+    disassemble,
+};
 
-    const AppMode = enum { disassemble, assemble };
+pub const ConfigParseErr = error{
+    missing_required_arg,
+    conflicting_mode,
+    missing_value,
+    unknown_argument,
+};
 
-    // TODO - Return an error union
-    pub fn fromArgs(args: **[][]u8) Cfg {
-        const Allowed = enum {
-            // TODO
-        };
-
-        const x = undefined;
-
-        for (args, 0..) |arg, i| {
-            switch (arg) {
-                "-f" => {
-                    std.debug.print("Found -f");
-                }
-            }
-        }
-
-        const result = Cfg{
-            // TODO
-        };
-
-        return result;
-    }
+pub const Config = struct {
+    mode: Mode,
+    input: ?[]const u8 = null,
 };
 
 pub fn main() !void {
@@ -35,53 +22,107 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stdout = std.io.getStdOut().writer();
-
-    // Read command line args to look for input file
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    try stdout.print("Number of arguments: {d}\n", .{args.len});
-    for (args, 0..) |arg, i| {
-        try stdout.print("Argument {d}: {s}\n", .{ i, arg });
+    // If config can't be parsed, print the help message and exit
+    const config = parseArgs(args) catch |err| {
+        const stderr = std.io.getStdErr().writer();
+        try stderr.print("Error: {}\n", .{err});
+        try stderr.print("Usage: {s} (-a|-d) [-i <input>]\n", .{args[0]});
+        try stderr.print("  -a           Assemble mode\n", .{});
+        try stderr.print("  -d           Disassemble mode\n", .{});
+        try stderr.print("  -i <input>   Input file (defaults to stdin if omitted)\n", .{});
+        return err;
+    };
+
+    _ = config;
+}
+
+pub fn parseArgs(args: []const []const u8) ConfigParseErr!Config {
+    var app_mode: ?Mode = null;
+    var input: ?[]const u8 = null;
+    var i: usize = 1; // Skip program name
+
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (arg.len == 0) continue;
+
+        if (!std.mem.startsWith(u8, arg, "-")) {
+            return ConfigParseErr.unknown_argument;
+        }
+
+        if (std.mem.eql(u8, arg, "-a")) {
+            if (app_mode != null) return ConfigParseErr.conflicting_mode;
+            app_mode = .assemble;
+            continue;
+        } else if (std.mem.eql(u8, arg, "-d")) {
+            if (app_mode != null) return ConfigParseErr.conflicting_mode;
+            app_mode = .disassemble;
+            continue;
+        } else if (std.mem.eql(u8, arg, "-i")) {
+            i += 1;
+            if (i >= args.len) return ConfigParseErr.missing_value;
+            input = args[i];
+            continue;
+        }
+
+        return ConfigParseErr.unknown_argument;
     }
-    // TODO
-    const cfg = Cfg.fromArgs(args);
-    _ = cfg;
 
-    try stdout.print("\n", .{});
+    if (app_mode == null) return ConfigParseErr.missing_required_arg;
 
-    // Check if a filename was provided as argument
-    const filename = if (args.len > 1) args[1] else "input.asm";
-    try stdout.print("Using file: {s}\n\n", .{filename});
-
-    // Open file and get stats
-    const file = try std.fs.cwd().openFile(filename, .{});
-    defer file.close();
-
-    const stat = try file.stat();
-    try stdout.print("File size: {d} bytes\n", .{stat.size});
-    try stdout.print("Creation time: {d}\n", .{stat.ctime});
-    try stdout.print("Last access time: {d}\n", .{stat.atime});
-    try stdout.print("Last modification time: {d}\n", .{stat.mtime});
-
-    // Read entire file as text
-    // const content = try file.readToEndAlloc(allocator, stat.size);
-    // defer allocator.free(content);
-    // try stdout.print("\nFile contents as text:\n{s}\n", .{content});
-
-    // Read file as binary
-    try file.seekTo(0); // Reset file position to beginning
-    var buffer: [1024]u8 = undefined;
-    const bytes_read = try file.readAll(&buffer);
-
-    try stdout.print("\nFirst 16 bytes as hex:\n", .{});
-    for (buffer[0..@min(16, bytes_read)]) |byte| {
-        try stdout.print("{X:0>2} ", .{byte});
-    }
-    try stdout.print("\n", .{});
+    return Config{
+        .mode = app_mode.?,
+        .input = input,
+    };
 }
 
 fn disassemble(f: *std.fs.File) !void {
     _ = f;
+}
+
+test "parser rejects missing mode argument" {
+    const test_args = [_][]const u8{ "program", "-i", "input.txt" };
+    const result = parseArgs(&test_args);
+    try std.testing.expectError(ConfigParseErr.missing_required_arg, result);
+}
+
+test "parser rejects conflicting modes" {
+    const test_args = [_][]const u8{ "program", "-a", "-d" };
+    const result = parseArgs(&test_args);
+    try std.testing.expectError(ConfigParseErr.conflicting_mode, result);
+}
+
+test "parser rejects missing input value" {
+    const test_args = [_][]const u8{ "program", "-a", "-i" };
+    const result = parseArgs(&test_args);
+    try std.testing.expectError(ConfigParseErr.missing_value, result);
+}
+
+test "parser rejects unknown arguments" {
+    const test_args = [_][]const u8{ "program", "-a", "-x" };
+    const result = parseArgs(&test_args);
+    try std.testing.expectError(ConfigParseErr.unknown_argument, result);
+}
+
+test "parser accepts valid assemble config" {
+    const test_args = [_][]const u8{ "program", "-a", "-i", "input.txt" };
+    const config = try parseArgs(&test_args);
+    try std.testing.expectEqual(Mode.assemble, config.mode);
+    try std.testing.expectEqualStrings("input.txt", config.input.?);
+}
+
+test "parser accepts valid disassemble config" {
+    const test_args = [_][]const u8{ "program", "-d", "-i", "input.txt" };
+    const config = try parseArgs(&test_args);
+    try std.testing.expectEqual(Mode.disassemble, config.mode);
+    try std.testing.expectEqualStrings("input.txt", config.input.?);
+}
+
+test "parser accepts mode with no input (defaults to null)" {
+    const test_args = [_][]const u8{ "program", "-a" };
+    const config = try parseArgs(&test_args);
+    try std.testing.expectEqual(Mode.assemble, config.mode);
+    try std.testing.expect(config.input == null);
 }
