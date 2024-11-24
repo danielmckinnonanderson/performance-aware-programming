@@ -15,22 +15,13 @@ pub const Config = struct {
         assemble,
         disassemble,
     };
-};
 
-pub const OpCode = enum(u6) {
-    mov = 0b10001,
-
-    const OpCodeParseErr = error{
-        unsupported_instruction,
-    };
-
-    pub fn tryParse(bits: u6) OpCodeParseErr!OpCode {
-        if (std.meta.intToEnum(OpCode, bits)) |op| {
-            return op;
-        } else |_| {
-            return OpCodeParseErr.unsupported_instruction;
-        }
-    }
+    pub const HELP_MESSAGE =
+        \\Usage: {s} (-a|-d) [-i <input>]
+        \\ -a           Assemble mode
+        \\ -d           Disassemble mode
+        \\ -i <input>   Input file (defaults to stdin if omitted)
+    ;
 };
 
 pub fn main() !void {
@@ -38,17 +29,15 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // Process args to create program config struct
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    // If config can't be parsed, print the help message and exit
     const config = parseArgs(args) catch |err| {
+        // If config can't be parsed, print the help message and exit
         const stderr = std.io.getStdErr().writer();
         try stderr.print("Error: {}\n", .{err});
-        try stderr.print("Usage: {s} (-a|-d) [-i <input>]\n", .{args[0]});
-        try stderr.print("  -a           Assemble mode\n", .{});
-        try stderr.print("  -d           Disassemble mode\n", .{});
-        try stderr.print("  -i <input>   Input file (defaults to stdin if omitted)\n", .{});
+        try stderr.print(Config.HELP_MESSAGE, .{args[0]});
         return err;
     };
 
@@ -66,6 +55,22 @@ pub fn main() !void {
         Config.Mode.assemble => {},
     }
 }
+
+pub const OpCode = enum(u6) {
+    mov = 0b10001,
+
+    const OpCodeParseErr = error{
+        unsupported_instruction,
+    };
+
+    pub fn tryParse(bits: u6) OpCodeParseErr!OpCode {
+        if (std.meta.intToEnum(OpCode, bits)) |op| {
+            return op;
+        } else |_| {
+            return OpCodeParseErr.unsupported_instruction;
+        }
+    }
+};
 
 pub fn parseArgs(args: []const []const u8) ConfigParseErr!Config {
     var app_mode: ?Config.Mode = null;
@@ -111,7 +116,12 @@ pub fn disassemble(input: *const std.fs.File) !OpCode {
     const bytes_read = try input.readAll(&buf);
     _ = bytes_read;
 
-    return OpCode.tryParse(@intCast(buf[0] >> 2));
+    const op = OpCode.tryParse(@intCast(buf[0] >> 2)) catch |err| {
+        std.debug.print("Bits {b} was not a supported instruction\n", .{buf[0] >> 2});
+        return err;
+    };
+
+    return op;
 }
 
 test "parser rejects missing mode argument" {
