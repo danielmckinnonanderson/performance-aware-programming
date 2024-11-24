@@ -57,13 +57,25 @@ pub fn main() !void {
 }
 
 pub const OpCode = enum(u6) {
-    mov = 0b10001,
+    mov = 0b100010,
 
     const OpCodeParseErr = error{
         unsupported_instruction,
     };
 
-    pub fn tryParse(bits: u6) OpCodeParseErr!OpCode {
+    pub fn tryFromStr(str: []const u8) OpCodeParseErr!OpCode {
+        if (str.len < 3) {
+            return OpCodeParseErr.unsupported_instruction;
+        }
+
+        if (std.mem.eql(u8, str[0..3], "mov")) {
+            return OpCode.mov;
+        }
+
+        return OpCodeParseErr.unsupported_instruction;
+    }
+
+    pub fn tryFromBits(bits: u6) OpCodeParseErr!OpCode {
         if (std.meta.intToEnum(OpCode, bits)) |op| {
             return op;
         } else |_| {
@@ -111,17 +123,26 @@ pub fn parseArgs(args: []const []const u8) ConfigParseErr!Config {
     };
 }
 
+// De-construct a binary file into an assembly (textual representation) file
 pub fn disassemble(input: *const std.fs.File) !OpCode {
     var buf: [1024]u8 = undefined;
     const bytes_read = try input.readAll(&buf);
     _ = bytes_read;
 
-    const op = OpCode.tryParse(@intCast(buf[0] >> 2)) catch |err| {
-        std.debug.print("Bits {b} was not a supported instruction\n", .{buf[0] >> 2});
+    const op_bits = buf[0] >> 2;
+    const op = OpCode.tryFromBits(@intCast(op_bits)) catch |err| {
+        std.debug.print("Bits {b} was not a supported instruction\n", .{op_bits});
         return err;
     };
 
     return op;
+}
+
+// Construct a binary file from an assembly (textual representation) file
+pub fn assemble(input: *const std.fs.File) ![]const u8 {
+    var buf: [1024]u8 = undefined;
+    const bytes_read = try input.readAll(&buf);
+    _ = bytes_read;
 }
 
 test "parser rejects missing mode argument" {
@@ -167,4 +188,17 @@ test "parser accepts mode with no input (defaults to null)" {
     const config = try parseArgs(&test_args);
     try std.testing.expectEqual(Config.Mode.assemble, config.mode);
     try std.testing.expect(config.input == null);
+}
+
+test "can read a 6-bit integer into a supported opcode" {
+    const mov_input: u6 = 0b100010;
+    try std.testing.expectEqual(OpCode.mov, OpCode.tryFromBits(mov_input));
+
+    const unsup_input: u6 = 0b111111;
+    try std.testing.expectError(OpCode.OpCodeParseErr.unsupported_instruction, OpCode.tryFromBits(unsup_input));
+}
+
+test "can parse a `mov` instruction from its textual representation" {
+    const mov_input = "mov cx,bx";
+    try std.testing.expectEqual(OpCode.mov, OpCode.tryFromStr(mov_input));
 }
