@@ -21,10 +21,12 @@ pub const Config = struct {
         \\ -a           Assemble mode
         \\ -d           Disassemble mode
         \\ -i <input>   Input file (defaults to stdin if omitted)
+        \\
     ;
 };
 
 pub fn main() !void {
+    // TODO - Consider a different alloc
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -48,9 +50,12 @@ pub fn main() !void {
         try std.fs.cwd().openFile(config.input.?, .{});
     defer input_file.close();
 
+    const stdout = std.io.getStdOut().writer();
+
     switch (config.mode) {
         Config.Mode.disassemble => {
-            _ = try disassemble(&input_file);
+            const output_str = try disassemble(&input_file, allocator);
+            try stdout.writeAll(output_str.items);
         },
         Config.Mode.assemble => {},
     }
@@ -62,6 +67,12 @@ pub const OpCode = enum(u6) {
     const OpCodeParseErr = error{
         unsupported_instruction,
     };
+
+    pub fn string(self: *const OpCode) []const u8 {
+        return switch (self.*) {
+            .mov => "mov",
+        };
+    }
 
     pub fn tryFromStr(str: []const u8) OpCodeParseErr!OpCode {
         if (str.len < 3) {
@@ -124,18 +135,36 @@ pub fn parseArgs(args: []const []const u8) ConfigParseErr!Config {
 }
 
 // De-construct a binary file into an assembly (textual representation) file
-pub fn disassemble(input: *const std.fs.File) !OpCode {
-    var buf: [1024]u8 = undefined;
-    const bytes_read = try input.readAll(&buf);
-    _ = bytes_read;
+pub fn disassemble(input: *const std.fs.File, allocator: std.mem.Allocator) !std.ArrayList(u8) {
+    var input_bytes: [1024]u8 = undefined;
+    const bytes_read = try input.readAll(&input_bytes);
 
-    const op_bits = buf[0] >> 2;
-    const op = OpCode.tryFromBits(@intCast(op_bits)) catch |err| {
-        std.debug.print("Bits {b} was not a supported instruction\n", .{op_bits});
-        return err;
-    };
+    var result = std.ArrayList(u8).init(allocator);
+    errdefer result.deinit();
 
-    return op;
+    try result.appendSlice("bits 16\n");
+
+    var i: usize = 0;
+    while (i < bytes_read) {
+        // Get the current byte
+        const byte = input_bytes[i];
+
+        const op_bits = byte >> 2;
+
+        const op = OpCode.tryFromBits(@as(u6, @truncate(op_bits))) catch |err| {
+            std.log.err("Failed to decode instruction at offset {d}: bits {b}", .{ i, op_bits });
+            return err;
+        };
+
+        try result.appendSlice(op.string());
+        try result.append('\n');
+
+        // TODO
+        const instruction_length = 1;
+        i += instruction_length;
+    }
+
+    return result;
 }
 
 // Construct a binary file from an assembly (textual representation) file
